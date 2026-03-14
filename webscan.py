@@ -4,6 +4,8 @@
 ########################
 
 from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
+import http.client
 import datetime
 import requests
 import time
@@ -25,12 +27,15 @@ print("[!] WebScan - A simple web enumeration tool | Made by Dami\n")
 url = input("[?] Enter target URL: ")
 wordlist = input("[?] Enter the path to your wordlist: ")
 
+print("\n")
+score = 0.0
 
-date = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S") # date and time for output file naming
-if not os.path.exists("scans"):
-    os.makedirs("scans")
+# --- Output file setup --- #
+date = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+output_file = f"/scans/scan_{date}.txt"
+if not os.path.exists("/scans"):
+    os.mkdir("/scans")
     print("[+] Created 'scans' directory.")
-
 
 # -- URL formatting --- #
 def format_url(url):
@@ -52,31 +57,71 @@ except FileNotFoundError:
     print("[-] Wordlist file not found.")
     sys.exit()
 
+scanned_count = 0
+progress_lock = Lock()
+
 # --- Bait scan --- #
 def bait_scan():
-    bait_url = f"{formatted_url}/idkwhattowriteherebruh"
-    response = requests.get(bait_url)
-    print(f"[+] Bait scan completed. Content length: {len(response.content)}")
-    return len(response.content)
+    bait_wordlist = ["x9QvM2Lr8ZpA7DkW4HjC", "H7WkP9rCqLZ8x2A4DVMj", "Z4C8xqH9D7PjAMrWLVk2", "rWZx9M4P2C7DqHkA8VLj", "A8ZqH9r4Wk2P7DVMCLxj"]
+    bait_lengths = []
+    
+    for bait in bait_wordlist:
+        try:
+            bait_url = f"{formatted_url}/{bait}"
+            response = requests.get(bait_url, timeout=5)
+            bait_lengths.append(len(response.content))
+        except Exception as e:
+            print(f"[-] Bait scan error for {bait}: {e}")
+    
+    unique_lengths = set(bait_lengths)
+    if len(unique_lengths) == 1:
+        print(f"[+] Server isn't probbably dynamic, using bait length: {bait_lengths[0]}")
+        return bait_lengths[0]
+    else:
+        print(f"[-] Warning: Server might be dynamic ! Detected {len(unique_lengths)} different content lengths.")
+        return sum(bait_lengths) / len(bait_lengths)
+
 bait_score = bait_scan()
 
-# --- Scoring algorithm --- #
-def score_scan(length):
-    if length <= bait_score:
+    
+def score_system(length):
+    percentage = abs(length - bait_score) / bait_score * 100
+    if percentage < 2:
         return "LOW"
-    elif length <= bait_score * 1.5:
+    elif percentage < 20:
         return "MEDIUM"
     else:
         return "HIGH"
+    
 
 # --- Url enumeration --- #
 def scan_word(word):
+    global scanned_count
     scan_url = f"{formatted_url}/{word}"
-    response = requests.get(scan_url)
-    length = len(response.content)
-    score = score_scan(length)
-    print(f"[+] Scanning: {scan_url} | Status Code: {response.status_code} | Content Length: {length} | Score: {score}")
+    status_code = "ERR"
+    score = "N/A"
+    try:
+        response = requests.get(scan_url, timeout=5)
+        status_code = response.status_code
+        length = len(response.content)
+        score = score_system(length)
+    except requests.RequestException:
+        pass
+    finally:
+        with progress_lock:
+            scanned_count += 1
+            print(
+                f"\r[+] Scanned: {scanned_count}/{total_words} | Word: {word} | Status: {status_code} | Score: {score}",
+                end="",
+                flush=True,
+            )
 
 with ThreadPoolExecutor() as executor:
     executor.map(scan_word, words)
 
+print("\n[+] Scan complete.")
+
+#TODO Ukládání do txt
+#TODO Předělání score systému
+#TODO Načítání z wordlistu
+#TODO Upravit status kody s významama tzv: 200 = OK, 403 = Forbidden, 404 = Not Found, 500 = Server Error
